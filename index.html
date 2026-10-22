@@ -311,6 +311,8 @@
   .upload.danger{ border-color:rgba(255,96,96,.4); color:#FF8E8E; background:rgba(255,96,96,.06); }
   .upload.danger:hover{ background:rgba(255,96,96,.16); border-color:#FF8E8E; box-shadow:3px 3px 0 rgba(255,96,96,.25); }
   .upload[hidden]{ display:none; }
+  .upload:disabled{ opacity:.38; cursor:not-allowed; filter:grayscale(.6); }
+  .upload:disabled:hover{ background:rgba(168,85,247,.07); border-color:rgba(168,85,247,.45); box-shadow:none; }
 
   /* 框选 */
   .pool-body.picking{ cursor:crosshair; }
@@ -817,6 +819,7 @@
       <span class="grow"></span>
       <button class="upload pick" id="boxBtn">框选清理</button>
       <button class="upload pick" id="delPicked" hidden>删除所选</button>
+      <button class="upload pick" id="recallBtn" title="把所有档位里的卡片全部退回待估区（不删除）">一键收回</button>
       <button class="upload danger" id="clearPoolBtn">全部清理</button>
       <button class="upload" id="folderBtn">+ 导入文件夹</button>
       <button class="upload solid" id="uploadBtn">+ 收货</button>
@@ -1263,14 +1266,11 @@
   var DEFAULT_ITEMS = [];
 
   var DEFAULT_TIERS = [
-    { char:"神临",   color:"#A855F7", hint:"祖传镇店，问价先交押金" },
-    { char:"夯完了", color:"#FF3D8B", hint:"真货，验完当场加价" },
     { char:"夯",     color:"#FF7A45", hint:"闭眼收，亏不了" },
     { char:"顶级",   color:"#FFD23F", hint:"顶配，挑不出毛病" },
     { char:"人上人", color:"#F472B6", hint:"拿得出手，有面子" },
     { char:"NPC",    color:"#38BDF8", hint:"大众货，谁都能用" },
-    { char:"拉",     color:"#4ADE80", hint:"凑合用，别细看" },
-    { char:"拉爆了", color:"#A896C0", hint:"收废品的都嫌沉" }
+    { char:"拉",     color:"#4ADE80", hint:"凑合用，别细看" }
   ];
 
   var BUILTIN_PRESETS = [
@@ -1366,20 +1366,47 @@
     return s;
   }
 
-  // 老的内置五档（夯/硬/稳/虚/拉）→ 换成新的默认八档，货物退回待估区
-  function upgradeOldDefault(s){
-    if (!s || s.tiers.length !== 5) return s;
-    if (s.tiers.map(function(t){ return t.char; }).join("") !== "夯硬稳虚拉") return s;
-    var all = [];
-    s.tiers.forEach(function(t){ all = all.concat(s.buckets[t.id] || []); });
-    var buckets = {};
-    s.tiers = DEFAULT_TIERS.map(function(d){
-      var nt = makeTier(d);
-      buckets[nt.id] = [];
-      return nt;
+  // 上一版发布的内置八档（改过档位字/颜色/提示语的不算，保持用户自己的配置）
+  var LEGACY_8 = [
+    { char:"神临",   color:"#A855F7", hint:"祖传镇店，问价先交押金" },
+    { char:"夯完了", color:"#FF3D8B", hint:"真货，验完当场加价" },
+    { char:"夯",     color:"#FF7A45", hint:"闭眼收，亏不了" },
+    { char:"顶级",   color:"#FFD23F", hint:"顶配，挑不出毛病" },
+    { char:"人上人", color:"#F472B6", hint:"拿得出手，有面子" },
+    { char:"NPC",    color:"#38BDF8", hint:"大众货，谁都能用" },
+    { char:"拉",     color:"#4ADE80", hint:"凑合用，别细看" },
+    { char:"拉爆了", color:"#A896C0", hint:"收废品的都嫌沉" }
+  ];
+
+  // 是否还停留在某一代内置默认档位上
+  function isLegacyDefault(s){
+    if (!s || !Array.isArray(s.tiers) || !s.tiers.length) return false;
+    // 最早的固定五档：只看档位字
+    if (s.tiers.map(function(t){ return t.char; }).join("") === "夯硬稳虚拉") return true;
+    // 上一版八档：必须字/色/提示语全都没改过才升级，避免覆盖用户自己的调整
+    if (s.tiers.length !== LEGACY_8.length) return false;
+    return s.tiers.every(function(t, i){
+      var d = LEGACY_8[i];
+      return t.char === d.char && t.color === d.color && t.hint === d.hint;
     });
-    s.buckets = buckets;
-    s.pool = all.concat(s.pool);
+  }
+
+  // 旧内置档位 → 换成当前默认档位；同名档位的卡片原地保留，其余退回待估区
+  function upgradeOldDefault(s){
+    if (!isLegacyDefault(s)) return s;
+    var newTiers = DEFAULT_TIERS.map(function(d){ return makeTier(d); });
+    var byChar = {}, newBuckets = {};
+    newTiers.forEach(function(t){ byChar[t.char] = t; newBuckets[t.id] = []; });
+    var leftover = [];
+    s.tiers.forEach(function(old){
+      var ids = (s.buckets[old.id] || []).slice();
+      var nt = byChar[old.char];
+      if (nt) newBuckets[nt.id] = newBuckets[nt.id].concat(ids);
+      else leftover = leftover.concat(ids);
+    });
+    s.tiers = newTiers;
+    s.buckets = newBuckets;
+    s.pool = leftover.concat(s.pool);
     return s;
   }
 
@@ -1487,6 +1514,7 @@
   function renderAll(){
     renderTiers();
     renderPool();
+    if (typeof syncRecallBtn === "function" && recallBtn) syncRecallBtn();
   }
 
   /* ============ 拖拽 ============ */
@@ -2130,6 +2158,34 @@
     if (!ids.length) return;
     if (!confirm("删掉选中的 " + ids.length + " 件？")) return;
     removeItems(ids);
+  });
+
+  // 一键收回：把所有档位里的卡片退回待估区（只是搬家，不删东西）
+  var recallBtn = document.getElementById("recallBtn");
+
+  function tieredIds(){
+    var out = [];
+    state.tiers.forEach(function(t){
+      (state.buckets[t.id] || []).forEach(function(id){
+        if (state.items[id] && out.indexOf(id) < 0) out.push(id);
+      });
+    });
+    return out;
+  }
+
+  function syncRecallBtn(){
+    recallBtn.disabled = tieredIds().length === 0;
+  }
+
+  recallBtn.addEventListener("click", function(){
+    var ids = tieredIds();
+    if (!ids.length){ toast("档位里已经是空的"); return; }
+    state.pool = ids.concat(state.pool);
+    state.tiers.forEach(function(t){ state.buckets[t.id] = []; });
+    save();
+    renderAll();
+    syncRecallBtn();
+    toast("收回 " + ids.length + " 件到待估区");
   });
 
   clearPoolBtn.addEventListener("click", function(){
