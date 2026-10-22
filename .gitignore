@@ -1,0 +1,20 @@
+# 隐私/内部数据，不进仓库
+.workbuddy-ai/
+
+# 自用维权/水印工具（不对外发布）
+make_watermark.py
+decode_watermark.py
+make_stamp.py
+
+# 素材源图 / 无关文件
+src_items.png
+可能是主观的.png
+
+# 本地发版副本
+锐评！/
+
+# 系统 / 缓存
+*.pyc
+__pycache__/
+.DS_Store
+Thumbs.db
